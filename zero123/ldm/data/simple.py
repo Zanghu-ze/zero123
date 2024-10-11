@@ -254,6 +254,20 @@ class ObjaverseData(Dataset):
         azimuth = np.arctan2(xyz[:,1], xyz[:,0])
         return np.array([theta, azimuth, z])
 
+    # Quaternion to rotation matrix conversion
+    def quaternion_to_rotation_matrix(quaternion):
+        """
+        Convert a quaternion into a 3x3 rotation matrix.
+        Quaternion should be of the form [w, x, y, z].
+        """
+        w, x, y, z = quaternion
+        R = np.array([
+            [1 - 2*y**2 - 2*z**2, 2*x*y - 2*w*z, 2*x*z + 2*w*y],
+            [2*x*y + 2*w*z, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*w*x],
+            [2*x*z - 2*w*y, 2*y*z + 2*w*x, 1 - 2*x**2 - 2*y**2]
+        ])
+        return R
+        
     def get_T(self, target_RT, cond_RT):
         R, T = target_RT[:3, :3], target_RT[:, -1]
         T_target = -R.T @ T
