@@ -603,7 +603,7 @@ if __name__ == "__main__":
     now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 
     # add cwd for convenience and to make classes in this file available when
-    # running as `python main.py`
+    # running as `python diffusion.py`
     # (in particular `main.DataModuleFromConfig`)
     sys.path.append(os.getcwd())
 
@@ -738,7 +738,7 @@ if __name__ == "__main__":
                 }
             },
         }
-        default_logger_cfg = default_logger_cfgs["testtube"]
+        default_logger_cfg = default_logger_cfgs["wandb"]
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:
