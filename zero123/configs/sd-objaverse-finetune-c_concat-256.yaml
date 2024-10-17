@@ -72,9 +72,9 @@ model:
 data:
   target: ldm.data.simple.ObjaverseDataModuleFromConfig
   params:
-    root_dir: 'views_whole_sphere'
-    batch_size: 192
-    num_workers: 16
+    root_dir: '/home/shared/haoze/indoor_data_partial'
+    batch_size: 16
+    num_workers: 2
     total_view: 4
     train:
       validation: False
