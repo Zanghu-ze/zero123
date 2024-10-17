@@ -340,6 +340,155 @@ class ObjaverseData(Dataset):
         im = im.convert("RGB")
         return self.tform(im)
 
+class HM3DData(Dataset):
+    def __init__(self,
+        root_dir='./indoor_data',
+        image_transforms=[],
+        ext="png",
+        default_trans=torch.zeros(3),
+        postprocess=None,
+        return_paths=False,
+        total_view=12,
+        validation=False
+        ) -> None:
+        """Create a dataset from a folder of images.
+        If you pass in a root directory it will be searched for images
+        ending in ext (ext can be a list)
+        """
+        self.root_dir = Path(root_dir)
+        self.default_trans = default_trans
+        self.return_paths = return_paths
+        if isinstance(postprocess, DictConfig):
+            postprocess = instantiate_from_config(postprocess)
+        self.postprocess = postprocess
+        self.total_view = total_view
+
+        if not isinstance(ext, (tuple, list, ListConfig)):
+            ext = [ext]
+
+        with open(os.path.join(root_dir, 'valid_paths.json')) as f:
+            self.paths = json.load(f)
+            
+        total_objects = len(self.paths)
+        if validation:
+            self.paths = self.paths[math.floor(total_objects / 100. * 99.):] # used last 1% as validation
+        else:
+            self.paths = self.paths[:math.floor(total_objects / 100. * 99.)] # used first 99% as training
+        print('============= length of dataset %d =============' % len(self.paths))
+        self.tform = image_transforms
+
+    def __len__(self):
+        return len(self.paths)
+        
+    def cartesian_to_spherical(self, xyz):
+        ptsnew = np.hstack((xyz, np.zeros(xyz.shape)))
+        xy = xyz[:,0]**2 + xyz[:,1]**2
+        z = np.sqrt(xy + xyz[:,2]**2)
+        theta = np.arctan2(np.sqrt(xy), xyz[:,2]) # for elevation angle defined from Z-axis down
+        #ptsnew[:,4] = np.arctan2(xyz[:,2], np.sqrt(xy)) # for elevation angle defined from XY-plane up
+        azimuth = np.arctan2(xyz[:,1], xyz[:,0])
+        return np.array([theta, azimuth, z])
+
+    # Quaternion to rotation matrix conversion
+    def quaternion_to_rotation_matrix(quaternion):
+        """
+        Convert a quaternion into a 3x3 rotation matrix.
+        Quaternion should be of the form [w, x, y, z].
+        """
+        w, x, y, z = quaternion
+        R = np.array([
+            [1 - 2*y**2 - 2*z**2, 2*x*y - 2*w*z, 2*x*z + 2*w*y],
+            [2*x*y + 2*w*z, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*w*x],
+            [2*x*z - 2*w*y, 2*y*z + 2*w*x, 1 - 2*x**2 - 2*y**2]
+        ])
+        return R
+        
+    def get_T(self, target_pose, cond_pose):
+        # target_pose: [x, y, z, qw, qx, qy, qz]
+        # cond_pose: [x, y, z, qw, qx, qy, qz]
+        
+        # Extract translation and quaternion for target pose
+        T_target = np.array(target_pose[:3])  # x, y, z
+        quaternion_target = target_pose[3:]  # qw, qx, qy, qz
+        R_target = self.quaternion_to_rotation_matrix(quaternion_target)  # Convert quaternion to rotation matrix
+        
+        # Extract translation and quaternion for conditioned pose
+        T_cond = np.array(cond_pose[:3])  # x, y, z
+        quaternion_cond = cond_pose[3:]  # qw, qx, qy, qz
+        R_cond = self.quaternion_to_rotation_matrix(quaternion_cond)  # Convert quaternion to rotation matrix
+
+        # Calculate transformed translations (similar to original code)
+        T_target_transformed = -R_target.T @ T_target
+        T_cond_transformed = -R_cond.T @ T_cond
+
+        # Convert transformed translations to spherical coordinates
+        theta_cond, azimuth_cond, z_cond = self.cartesian_to_spherical(T_cond_transformed[None, :])
+        theta_target, azimuth_target, z_target = self.cartesian_to_spherical(T_target_transformed[None, :])
+
+        # Calculate relative differences
+        d_theta = theta_target - theta_cond
+        d_azimuth = (azimuth_target - azimuth_cond) % (2 * math.pi)
+        d_z = z_target - z_cond
+
+        # Return the result in the desired format
+        d_T = torch.tensor([d_theta.item(), math.sin(d_azimuth.item()), math.cos(d_azimuth.item()), d_z.item()])
+        return d_T
+
+    def load_im(self, path, color):
+        '''
+        replace background pixel with random color in rendering
+        '''
+        try:
+            img = plt.imread(path)
+        except:
+            print(path)
+            sys.exit()
+        img[img[:, :, -1] == 0.] = color
+        img = Image.fromarray(np.uint8(img[:, :, :3] * 255.))
+        return img
+
+    def __getitem__(self, index):
+
+        data = {}
+        total_view = self.total_view
+        index_target, index_cond = random.sample(range(total_view), 2) # without replacement
+        filename = os.path.join(self.root_dir, self.paths[index])
+
+        # print(self.paths[index])
+
+        if self.return_paths:
+            data["path"] = str(filename)
+        
+        color = [1., 1., 1., 1.]
+
+        try:
+            target_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_target), color))
+            cond_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_cond), color))
+            target_RT = np.load(os.path.join(filename, '%03d.npy' % index_target))
+            cond_RT = np.load(os.path.join(filename, '%03d.npy' % index_cond))
+        except:
+            # very hacky solution, sorry about this
+            filename = os.path.join(self.root_dir, '692db5f2d3a04bb286cb977a7dba903e_1') # this one we know is valid
+            target_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_target), color))
+            cond_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_cond), color))
+            target_RT = np.load(os.path.join(filename, '%03d.npy' % index_target))
+            cond_RT = np.load(os.path.join(filename, '%03d.npy' % index_cond))
+            target_im = torch.zeros_like(target_im)
+            cond_im = torch.zeros_like(cond_im)
+
+        data["image_target"] = target_im
+        data["image_cond"] = cond_im
+        data["T"] = self.get_T(target_RT, cond_RT)
+
+        if self.postprocess is not None:
+            data = self.postprocess(data)
+
+        return data
+
+    def process_im(self, im):
+        im = im.convert("RGB")
+        return self.tform(im)
+
 class FolderData(Dataset):
     def __init__(self,
         root_dir,
