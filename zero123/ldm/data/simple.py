@@ -189,19 +189,19 @@ class ObjaverseDataModuleFromConfig(pl.LightningDataModule):
 
 
     def train_dataloader(self):
-        dataset = ObjaverseData(root_dir=self.root_dir, total_view=self.total_view, validation=False, \
+        dataset = HM3DData(root_dir=self.root_dir, total_view=self.total_view, validation=False, \
                                 image_transforms=self.image_transforms)
         sampler = DistributedSampler(dataset)
         return wds.WebLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False, sampler=sampler)
 
     def val_dataloader(self):
-        dataset = ObjaverseData(root_dir=self.root_dir, total_view=self.total_view, validation=True, \
+        dataset = HM3DData(root_dir=self.root_dir, total_view=self.total_view, validation=True, \
                                 image_transforms=self.image_transforms)
         sampler = DistributedSampler(dataset)
         return wds.WebLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
     
     def test_dataloader(self):
-        return wds.WebLoader(ObjaverseData(root_dir=self.root_dir, total_view=self.total_view, validation=self.validation),\
+        return wds.WebLoader(HM3DData(root_dir=self.root_dir, total_view=self.total_view, validation=self.validation),\
                           batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
 
 
@@ -390,7 +390,7 @@ class HM3DData(Dataset):
         return np.array([theta, azimuth, z])
 
     # Quaternion to rotation matrix conversion
-    def quaternion_to_rotation_matrix(quaternion):
+    def quaternion_to_rotation_matrix(self, quaternion):
         """
         Convert a quaternion into a 3x3 rotation matrix.
         Quaternion should be of the form [w, x, y, z].
@@ -441,9 +441,10 @@ class HM3DData(Dataset):
         try:
             img = plt.imread(path)
         except:
+            print("there are some problems\n")
             print(path)
             sys.exit()
-        img[img[:, :, -1] == 0.] = color
+        # img[img[:, :, -1] == 0.] = color
         img = Image.fromarray(np.uint8(img[:, :, :3] * 255.))
         return img
 
@@ -462,10 +463,10 @@ class HM3DData(Dataset):
         color = [1., 1., 1., 1.]
 
         try:
-            target_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_target), color))
-            cond_im = self.process_im(self.load_im(os.path.join(filename, '%03d.png' % index_cond), color))
-            target_RT = np.load(os.path.join(filename, '%03d.npy' % index_target))
-            cond_RT = np.load(os.path.join(filename, '%03d.npy' % index_cond))
+            target_im = self.process_im(self.load_im(os.path.join(filename, '%06d.png' % index_target), color))
+            cond_im = self.process_im(self.load_im(os.path.join(filename, '%06d.png' % index_cond), color))
+            target_RT = np.load(os.path.join(filename, '%06d.npy' % index_target))
+            cond_RT = np.load(os.path.join(filename, '%06d.npy' % index_cond))
         except:
             # very hacky solution, sorry about this
             filename = os.path.join(self.root_dir, '692db5f2d3a04bb286cb977a7dba903e_1') # this one we know is valid
