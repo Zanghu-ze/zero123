@@ -72,7 +72,7 @@ model:
 data:
   target: ldm.data.simple.ObjaverseDataModuleFromConfig
   params:
-    root_dir: '/home/shared/haoze/indoor_data_partial'
+    root_dir: '/nesa_data/home/haoze/data/indoor_data_partial' # You should change this path as your own data path
     batch_size: 16
     num_workers: 2
     total_view: 4
