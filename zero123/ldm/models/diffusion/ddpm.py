@@ -1273,7 +1273,7 @@ class LatentDiffusion(DDPM):
                                            force_c_encode=True,
                                            return_original_cond=True,
                                            bs=N)
-        N = min(x.shape[0], N)
+        N = min(x.shpe[0], N)
         n_row = min(x.shape[0], n_row)
         log["inputs"] = x
         log["reconstruction"] = xrec
