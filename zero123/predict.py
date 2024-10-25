@@ -20,6 +20,7 @@ from torchvision import transforms
 
 
 _GPU_INDEX = 0
+local_safety_checker_path = '/storage/home/haoze/.cache/huggingface/hub/models--CompVis--stable-diffusion-safety-checker/snapshots/cb41f3a270d63d454d385fc2e4f571c487c253c5'
 
 
 def load_model_from_config(config, ckpt, device, verbose=False):
@@ -50,6 +51,8 @@ def sample_model(input_im, model, sampler, precision, h, w,
     with precision_scope('cuda'):
         with model.ema_scope():
             c = model.get_learned_conditioning(input_im).tile(n_samples, 1, 1)
+            elevation = math.radians(elevation)
+            azimuth = math.radians(azimuth)
             T = torch.tensor([elevation,
                               math.sin(azimuth), math.cos(azimuth),
                               radius])
@@ -97,8 +100,8 @@ def preprocess_image(models, input_im, preprocess):
         # (H, W, 3) array in [0, 1].
     else:
         input_im = input_im.resize([256, 256], Image.LANCZOS)
-        # input_im = np.asarray(input_im, dtype=np.float32) / 255.0
-        input_im = np.zeros((256, 256, 3), dtype=np.float32)
+        input_im = np.asarray(input_im, dtype=np.float32) / 255.0
+        # input_im = np.zeros((256, 256, 3), dtype=np.float32)
 
         # visulize the input image
         # save the input_im to a file
@@ -136,22 +139,22 @@ def main_run(raw_im,
     :param raw_im (PIL Image).
     '''
     
-    raw_im.thumbnail([1536, 1536], Image.LANCZOS)
-    safety_checker_input = models['clip_fe'](raw_im, return_tensors='pt').to(device)
-    (image, has_nsfw_concept) = models['nsfw'](
-        images=np.ones((1, 3)), clip_input=safety_checker_input.pixel_values)
-    print('has_nsfw_concept:', has_nsfw_concept)
-    if np.any(has_nsfw_concept):
-        print('NSFW content detected.')
-        to_return = [None] * 10
-        description = ('###  <span style="color:red"> Unfortunately, '
-                       'potential NSFW content was detected, '
-                       'which is not supported by our model. '
-                       'Please try again with a different image. </span>')
-        to_return[0] = description
-        return to_return
-    else:
-        print('Safety check passed.')
+    # raw_im.thumbnail([1536, 1536], Image.LANCZOS)
+    # safety_checker_input = models['clip_fe'](raw_im, return_tensors='pt').to(device)
+    # (image, has_nsfw_concept) = models['nsfw'](
+    #     images=np.ones((1, 3)), clip_input=safety_checker_input.pixel_values)
+    # print('has_nsfw_concept:', has_nsfw_concept)
+    # if np.any(has_nsfw_concept):
+    #     print('NSFW content detected.')
+    #     to_return = [None] * 10
+    #     description = ('###  <span style="color:red"> Unfortunately, '
+    #                    'potential NSFW content was detected, '
+    #                    'which is not supported by our model. '
+    #                    'Please try again with a different image. </span>')
+    #     to_return[0] = description
+    #     return to_return
+    # else:
+    #     print('Safety check passed.')
 
     input_im = preprocess_image(models, raw_im, preprocess)
 
@@ -198,14 +201,15 @@ def predict(device_idx: int =_GPU_INDEX,
     models = dict()
     print('Instantiating LatentDiffusion...')
     models['turncam'] = load_model_from_config(config, ckpt, device=device)
-    print('Instantiating Carvekit HiInterface...')
-    models['carvekit'] = create_carvekit_interface()
+    # print('Instantiating Carvekit HiInterface...')
+    # models['carvekit'] = create_carvekit_interface()
     print('Instantiating StableDiffusionSafetyChecker...')
     models['nsfw'] = StableDiffusionSafetyChecker.from_pretrained(
-        'CompVis/stable-diffusion-safety-checker').to(device)
+        local_safety_checker_path).to(device)
+
     print('Instantiating AutoFeatureExtractor...')
     models['clip_fe'] = AutoFeatureExtractor.from_pretrained(
-        'CompVis/stable-diffusion-safety-checker')
+        local_safety_checker_path)
 
     cond_image = Image.open(cond_image_path)
 
