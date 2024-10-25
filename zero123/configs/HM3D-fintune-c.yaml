@@ -19,11 +19,11 @@ model:
     scheduler_config: # 10000 warmup steps
       target: ldm.lr_scheduler.LambdaLinearScheduler
       params:
-        warm_up_steps: [ 100 ]
-        cycle_lengths: [ 10000000000000 ] # incredibly large number to prevent corner cases
-        f_start: [ 1.e-6 ]
-        f_max: [ 1. ]
-        f_min: [ 1. ]
+        warm_up_steps: [ 10 ]
+        cycle_lengths: [ 10000000 ] # incredibly large number to prevent corner cases
+        f_start: [ 1.0 ]
+        f_max: [ 0.1 ]
+        f_min: [ 0.05 ]
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
@@ -72,8 +72,8 @@ model:
 data:
   target: ldm.data.simple.ObjaverseDataModuleFromConfig
   params:
-    root_dir: '/home/shared/haoze/indoor_data_partial'
-    batch_size: 16
+    root_dir: '/storage/home/haoze/indoor_data_partial'
+    batch_size: 32
     num_workers: 2
     total_view: 4
     train:
