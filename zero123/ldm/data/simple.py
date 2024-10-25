@@ -465,8 +465,8 @@ class HM3DData(Dataset):
         try:
             target_im = self.process_im(self.load_im(os.path.join(filename, '%06d.png' % index_target), color))
             cond_im = self.process_im(self.load_im(os.path.join(filename, '%06d.png' % index_cond), color))
-            target_RT = np.load(os.path.join(filename, '%06d.npy' % index_target))
-            cond_RT = np.load(os.path.join(filename, '%06d.npy' % index_cond))
+            target_RT = np.load(os.path.join(filename, '%06d.npy' % index_target))[[0,1,2,3,4,6,5]]
+            cond_RT = np.load(os.path.join(filename, '%06d.npy' % index_cond))[[0,1,2,3,4,6,5]]
         except:
             # very hacky solution, sorry about this
             filename = os.path.join(self.root_dir, '692db5f2d3a04bb286cb977a7dba903e_1') # this one we know is valid
