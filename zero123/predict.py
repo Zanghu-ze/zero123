@@ -51,8 +51,8 @@ def sample_model(input_im, model, sampler, precision, h, w,
     with precision_scope('cuda'):
         with model.ema_scope():
             c = model.get_learned_conditioning(input_im).tile(n_samples, 1, 1)
-            elevation = math.radians(elevation)
-            azimuth = math.radians(azimuth)
+            # elevation = math.radians(elevation)
+            # azimuth = math.radians(azimuth)
             T = torch.tensor([elevation,
                               math.sin(azimuth), math.cos(azimuth),
                               radius])
@@ -100,6 +100,7 @@ def preprocess_image(models, input_im, preprocess):
         # (H, W, 3) array in [0, 1].
     else:
         input_im = input_im.resize([256, 256], Image.LANCZOS)
+        # input_im = input_im.rotate(-90, expand=True)  # 顺时针旋转90度
         input_im = np.asarray(input_im, dtype=np.float32) / 255.0
         # input_im = np.zeros((256, 256, 3), dtype=np.float32)
 
