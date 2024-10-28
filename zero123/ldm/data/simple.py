@@ -447,12 +447,23 @@ class HM3DData(Dataset):
         # img[img[:, :, -1] == 0.] = color
         img = Image.fromarray(np.uint8(img[:, :, :3] * 255.))
         return img
+    
+    def get_index_pair(self, total_view):
+        prob = random.random()
+        
+        if prob < 0.33:
+            return 0, 1
+        elif prob < 0.66:
+            return 0, 2
+        else:
+            return 0,3
 
     def __getitem__(self, index):
 
         data = {}
         total_view = self.total_view
-        index_target, index_cond = random.sample(range(total_view), 2) # without replacement
+        # index_target, index_cond = random.sample(range(total_view), 2) # without replacement
+        index_target, index_cond = self.get_index_pair(total_view)
         filename = os.path.join(self.root_dir, self.paths[index])
 
         # print(self.paths[index])
