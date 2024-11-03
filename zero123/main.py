@@ -707,6 +707,7 @@ if __name__ == "__main__":
                         input_weight[:, :4, :, :].copy_(old_state[input_key])
                         old_state[input_key] = torch.nn.parameter.Parameter(input_weight)
 
+            old_state = {k: v for k, v in old_state.items() if k != 'cc_projection.weight'}
             m, u = model.load_state_dict(old_state, strict=False)
 
             if len(m) > 0:
@@ -719,13 +720,15 @@ if __name__ == "__main__":
         # trainer and callbacks
         trainer_kwargs = dict()
 
+
+        wandb_log_dir = "/storage/home/haoze/logs"
         # default logger configs
         default_logger_cfgs = {
             "wandb": {
                 "target": "pytorch_lightning.loggers.WandbLogger",
                 "params": {
                     "name": nowname,
-                    "save_dir": logdir,
+                    "save_dir": wandb_log_dir,
                     "offline": opt.debug,
                     "id": nowname,
                 }
