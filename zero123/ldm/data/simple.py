@@ -403,35 +403,68 @@ class HM3DData(Dataset):
         ])
         return R
         
+
     def get_T(self, target_pose, cond_pose):
         # target_pose: [x, y, z, qw, qx, qy, qz]
         # cond_pose: [x, y, z, qw, qx, qy, qz]
         
-        # Extract translation and quaternion for target pose
-        T_target = np.array(target_pose[:3])  # x, y, z
-        quaternion_target = target_pose[3:]  # qw, qx, qy, qz
-        R_target = self.quaternion_to_rotation_matrix(quaternion_target)  # Convert quaternion to rotation matrix
-        
-        # Extract translation and quaternion for conditioned pose
-        T_cond = np.array(cond_pose[:3])  # x, y, z
-        quaternion_cond = cond_pose[3:]  # qw, qx, qy, qz
-        R_cond = self.quaternion_to_rotation_matrix(quaternion_cond)  # Convert quaternion to rotation matrix
+        # Extract translations and quaternions for both poses
+        T_target = np.array(target_pose[:3])  # x, y, z for target
+        quaternion_target = target_pose[3:]   # qw, qx, qy, qz for target
+        R_target = self.quaternion_to_rotation_matrix(quaternion_target)
+
+        T_cond = np.array(cond_pose[:3])  # x, y, z for condition
+        quaternion_cond = cond_pose[3:]   # qw, qx, qy, qz for condition
+        R_cond = self.quaternion_to_rotation_matrix(quaternion_cond)
+
+        # Calculate position differences in the same coordinate frame
+        delta_pos = T_target - T_cond
+        delta_x, delta_y, delta_z = delta_pos  # Unpack the delta positions
 
         # Calculate transformed translations (similar to original code)
         T_target_transformed = -R_target.T @ T_target
         T_cond_transformed = -R_cond.T @ T_cond
 
         # Convert transformed translations to spherical coordinates
-        theta_cond, azimuth_cond, z_cond = self.cartesian_to_spherical(T_cond_transformed[None, :])
-        theta_target, azimuth_target, z_target = self.cartesian_to_spherical(T_target_transformed[None, :])
+        theta_cond, azimuth_cond, _ = self.cartesian_to_spherical(T_cond_transformed[None, :])
+        theta_target, azimuth_target, _ = self.cartesian_to_spherical(T_target_transformed[None, :])
 
         # Calculate relative differences
         d_theta = theta_target - theta_cond
         d_azimuth = (azimuth_target - azimuth_cond) % (2 * math.pi)
-        d_z = z_target - z_cond
 
-        # Return the result in the desired format
-        d_T = torch.tensor([d_theta.item(), math.sin(d_azimuth.item()), math.cos(d_azimuth.item()), d_z.item()])
+        # round the original data
+        d_theta_deg = round(math.degrees(d_theta.item()) / 5) * 5
+        d_azimuth_deg = round(math.degrees(d_azimuth.item()) / 5) * 5
+
+        d_theta = math.radians(d_theta_deg)
+        d_azimuth = math.radians(d_azimuth_deg)
+        
+        # Round delta_x, delta_y, delta_z to 3 decimal places
+        delta_x = round(delta_x, 3)
+        delta_y = round(delta_y, 3)
+        delta_z = round(delta_z, 3)
+
+        # Set threshold for small values
+        threshold = 1e-12
+        if abs(d_theta) < threshold:
+            d_theta = 0.0
+        sin_azimuth = math.sin(d_azimuth)
+        if abs(sin_azimuth) < threshold:
+            sin_azimuth = 0.0
+        cos_azimuth = math.cos(d_azimuth)
+        if abs(cos_azimuth) < threshold:
+            cos_azimuth = 0.0 
+
+        # Compute the output tensor with specified format
+        d_T = torch.tensor([
+            delta_x,                  # Delta x
+            delta_y,                  # Delta y
+            delta_z,                  # Delta z
+            d_theta,                  # Elevation
+            sin_azimuth,              # Sin of azimuth
+            cos_azimuth               # Cos of azimuth
+        ])
         return d_T
 
     def load_im(self, path, color):
