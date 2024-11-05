@@ -10,6 +10,7 @@ from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from einops import rearrange
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.util import create_carvekit_interface, load_and_preprocess, instantiate_from_config
+from ldm.models.diffusion.dpm_sovler import NoiseScheduleVP, model_wrapper, DPM_Solver
 from lovely_numpy import lo
 from omegaconf import OmegaConf
 from PIL import Image
@@ -71,6 +72,7 @@ def sample_model(input_im, model, sampler, precision, h, w,
                 uc = None
 
             shape = [4, h // 8, w // 8]
+            start_time = time.time()
             samples_ddim, _ = sampler.sample(S=ddim_steps,
                                              conditioning=cond,
                                              batch_size=n_samples,
@@ -80,10 +82,95 @@ def sample_model(input_im, model, sampler, precision, h, w,
                                              unconditional_conditioning=uc,
                                              eta=ddim_eta,
                                              x_T=None)
+            end_time = time.time()
+
+            total_time = end_time - start_time
+
+            print(f"The DDIM inference time is {total_time:04f}s")
             # print(samples_ddim.shape)
             x_samples_ddim = model.decode_first_stage(samples_ddim)
             return torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0).cpu()
 
+@torch.no_grad()
+def sample_model_withDPMSolver(input_im, model, sampler, precision, h, w,
+                 ddim_steps, n_samples, scale, ddim_eta,
+                 elevation, azimuth, radius):
+    precision_scope = autocast if precision == 'autocast' else nullcontext
+
+    with precision_scope('cuda'):
+        with model.ema_scope():
+            c = model.get_learned_conditioning(input_im).tile(n_samples, 1, 1)
+            # elevation = math.radians(elevation)
+            # azimuth = math.radians(azimuth)
+            T = torch.tensor([elevation,
+                              math.sin(azimuth), math.cos(azimuth),
+                              radius])
+            T = T[None, None, :].repeat(n_samples, 1, 1).to(c.device)
+            c = torch.cat([c, T], dim=-1).float()
+            c = model.cc_projection(c)
+            cond = {}
+            cond['c_crossattn'] = [c]
+            cond['c_concat'] = [model.encode_first_stage((input_im.to(c.device))).mode().detach()
+                                .repeat(n_samples, 1, 1, 1)]
+            if scale != 1.0:
+                uc = {}
+                uc['c_concat'] = [torch.zeros(n_samples, 4, h // 8, w // 8).to(c.device)]
+                uc['c_crossattn'] = [torch.zeros_like(c).to(c.device)]
+            else:
+                uc = None
+
+            # use the DPM solver
+            timesteps = 1000
+            linear_start = 0.00085
+            linear_end = 0.0120
+
+            # 生成线性递增的 betas 数组
+            betas = torch.linspace(linear_start, linear_end, timesteps)
+
+            dpm_noise_schedule = NoiseScheduleVP('discrete', betas=betas)
+
+            model_fn = model_wrapper(
+                sampler.model.model,
+                noise_schedule = dpm_noise_schedule,
+                model_type='noise',
+                guidance_type='classifier-free',
+                condition=cond,
+                unconditional_condition=uc,
+                guidance_scale=scale
+            )
+
+            dpm_solver = DPM_Solver(model_fn, dpm_noise_schedule, algorithm_type='dpmsolver++')
+
+            shape = [n_samples ,4, h // 8, w // 8]
+            x_T = torch.randn(shape, device=model.device)
+
+            start_time = time.time()
+            sample_dpm = dpm_solver.sample(
+                x_T,
+                steps=10,
+                order=2,
+                skip_type="logSNR",
+                method="multistep",
+            )
+
+            end_time = time.time()
+
+            total_running_time = end_time - start_time
+            print(f"The DPM inference time is {total_running_time:04f}s")
+
+            # shape = [4, h // 8, w // 8]
+            # samples_ddim, _ = sampler.sample(S=ddim_steps,
+            #                                  conditioning=cond,
+            #                                  batch_size=n_samples,
+            #                                  shape=shape,
+            #                                  verbose=False,
+            #                                  unconditional_guidance_scale=scale,
+            #                                  unconditional_conditioning=uc,
+            #                                  eta=ddim_eta,
+            #                                  x_T=None)
+            # print(samples_ddim.shape)
+            x_samples_ddim = model.decode_first_stage(sample_dpm)
+            return torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0).cpu()
 
 def preprocess_image(models, input_im, preprocess):
     '''
@@ -134,7 +221,7 @@ def main_run(raw_im,
              models, device,
              elevation=0.0, azimuth=0.0, radius=0.0,
              preprocess=False,
-             scale=3.0, n_samples=4, ddim_steps=50, ddim_eta=1.0,
+             scale=3.0, n_samples=4, ddim_steps=20, ddim_eta=1.0,
              precision='fp32', h=256, w=256):
     '''
     :param raw_im (PIL Image).
@@ -172,7 +259,7 @@ def main_run(raw_im,
     sampler = DDIMSampler(models['turncam'])
     # used_x = -x  # NOTE: Polar makes more sense in Basile's opinion this way!
     used_elevation = elevation  # NOTE: Set this way for consistency.
-    x_samples_ddim = sample_model(input_im, models['turncam'], sampler, precision, h, w,
+    x_samples_ddim = sample_model_withDPMSolver(input_im, models['turncam'], sampler, precision, h, w,
                                   ddim_steps, n_samples, scale, ddim_eta,
                                   used_elevation, azimuth, radius)
 
@@ -186,7 +273,7 @@ def main_run(raw_im,
 
 def predict(device_idx: int =_GPU_INDEX,
             ckpt: str ="./105000.ckpt",
-            config: str ="configs/sd-objaverse-finetune-c_concat-256.yaml",
+            config: str ="/storage/home/haoze/using_models/zero123/zero123/configs/HM3D-fintune-c.yaml",
             cond_image_path: str = "cond.png",
             elevation_in_degree: float = 0.0,
             azimuth_in_degree: float = 0.0,
