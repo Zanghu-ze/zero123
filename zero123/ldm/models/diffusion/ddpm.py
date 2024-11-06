@@ -16,6 +16,7 @@ from contextlib import contextmanager, nullcontext
 from functools import partial
 import itertools
 from tqdm import tqdm
+from PIL import Image
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from omegaconf import ListConfig
@@ -25,6 +26,7 @@ from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
+from ldm.models.diffusion.dpm_sovler import NoiseScheduleVP, model_wrapper, DPM_Solver
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.attention import CrossAttention
 
@@ -523,7 +525,7 @@ class LatentDiffusion(DDPM):
         self.cond_stage_forward = cond_stage_forward
 
         # construct linear projection layer for concatenating image CLIP embedding and RT
-        self.cc_projection = nn.Linear(772, 768)
+        self.cc_projection = nn.Linear(774, 768)
         nn.init.eye_(list(self.cc_projection.parameters())[0][:768, :768])
         nn.init.zeros_(list(self.cc_projection.parameters())[1])
         self.cc_projection.requires_grad_(True)
@@ -535,6 +537,9 @@ class LatentDiffusion(DDPM):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys)
             self.restarted_from_ckpt = True
+
+        # Add one new loss term for the current SD model
+
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -1007,6 +1012,74 @@ class LatentDiffusion(DDPM):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
         model_output = self.apply_model(x_noisy, t, cond)
+        
+        # Use the DPM-sovler to sample the x_noisy
+        dpm_noise_schedule = NoiseScheduleVP('discrete', betas=self.betas)
+
+        # # get the first cond
+        # first_cond = {
+        #     "c_crossattn": [cond["c_crossattn"][0]],
+        #     "c_concat": [cond["c_concat"][0]]
+        # }
+
+        uc = {}
+        uc['c_concat'] = [torch.zeros(4, 4, 32, 32).to(self.device)]
+        uc['c_crossattn'] = [torch.zeros(4, 1, 768).to(self.device)]
+
+        dpm_model_fn = model_wrapper(
+            self.model,
+            noise_schedule=dpm_noise_schedule,
+            model_type='noise',
+            guidance_type='classifier-free',
+            condition=cond,
+            unconditional_condition=uc,
+            guidance_scale=3.0
+        )
+
+        dpm_solver = DPM_Solver(dpm_model_fn,
+                                dpm_noise_schedule,
+                                algorithm_type='dpmsolver++')
+
+        # get the sample result from the DPM solver
+        shape = [4 ,4, 32, 32]
+        x_T = torch.randn(shape, device=self.device)
+        # x_input = x_noisy[0:4]
+        x_0_dpm_sample = dpm_solver.sample(
+            x_T,
+            steps=20,
+            order=2,
+            skip_type='logSNR',
+            method='multistep',
+        )
+
+        # Then we need to visulized the results
+        x_0_samples = self.decode_first_stage(x_0_dpm_sample)
+        x_0_start = self.decode_first_stage(x_start)
+
+        # Normalize the data to be in the range [0, 1]
+        x_samples_dpm = torch.clamp((x_0_samples + 1.0) / 2.0, min=0.0, max=1.0).cpu()
+        x_start_samples = torch.clamp((x_0_start + 1.0) / 2.0, min=0.0, max=1.0).cpu()
+
+        # List to store the output images
+        output_ims = []
+
+        # Iterate over each sample and convert it for image storage
+        for idx, _ in enumerate(x_samples_dpm):
+            # Convert to numpy format and rearrange dimensions
+            x_sample_dpm = 255.0 * rearrange(x_samples_dpm[idx].cpu().numpy(), 'c h w -> h w c')
+            x_sample_0 = 255.0 * rearrange(x_start_samples[idx].cpu().numpy(), 'c h w -> h w c') 
+            # Convert to a PIL Image
+            img_dpm = Image.fromarray(x_sample_dpm.astype(np.uint8))
+            img_start = Image.fromarray(x_sample_0.astype(np.uint8)) 
+
+            output_ims.append(img_dpm)
+            output_ims.append(img_start) 
+            
+            # Save the image with a filename that includes the sample index
+            img_dpm.save(f"sample_dpm_{idx}.png")
+            img_start.save(f"sample_0_{idx}.png")
+
+        print("Images have been saved successfully!")
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
@@ -1447,6 +1520,17 @@ class DiffusionWrapper(pl.LightningModule):
         self.diffusion_model = instantiate_from_config(diff_model_config)
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm', 'hybrid-adm']
+
+        # # add the DPM solver setting
+        # dpm_noise_schedule = NoiseScheduleVP(schedule='discrete', betas=self.betas)
+
+        # self.dpm_model_fn = model_wrapper(
+        #     self.diffusion_model,
+        #     noise_schedule=dpm_noise_schedule,
+        #     model_type='noise',
+        #     guidance_type='classifier-free',
+            
+        # )
 
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None, c_adm=None):
         if self.conditioning_key is None:

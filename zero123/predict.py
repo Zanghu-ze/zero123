@@ -54,9 +54,13 @@ def sample_model(input_im, model, sampler, precision, h, w,
             c = model.get_learned_conditioning(input_im).tile(n_samples, 1, 1)
             # elevation = math.radians(elevation)
             # azimuth = math.radians(azimuth)
-            T = torch.tensor([elevation,
-                              math.sin(azimuth), math.cos(azimuth),
-                              radius])
+            T = torch.tensor([0.0,
+                              0.0,
+                              0.0,
+                              elevation,
+                              math.sin(azimuth), 
+                              math.cos(azimuth),
+                              ])
             T = T[None, None, :].repeat(n_samples, 1, 1).to(c.device)
             c = torch.cat([c, T], dim=-1).float()
             c = model.cc_projection(c)
@@ -102,9 +106,13 @@ def sample_model_withDPMSolver(input_im, model, sampler, precision, h, w,
             c = model.get_learned_conditioning(input_im).tile(n_samples, 1, 1)
             # elevation = math.radians(elevation)
             # azimuth = math.radians(azimuth)
-            T = torch.tensor([elevation,
-                              math.sin(azimuth), math.cos(azimuth),
-                              radius])
+            T = torch.tensor([0.0,
+                              0.0,
+                              0.0,
+                              elevation,
+                              math.sin(azimuth), 
+                              math.cos(azimuth),
+                              ])
             T = T[None, None, :].repeat(n_samples, 1, 1).to(c.device)
             c = torch.cat([c, T], dim=-1).float()
             c = model.cc_projection(c)
@@ -128,6 +136,7 @@ def sample_model_withDPMSolver(input_im, model, sampler, precision, h, w,
             betas = torch.linspace(linear_start, linear_end, timesteps)
 
             dpm_noise_schedule = NoiseScheduleVP('discrete', betas=betas)
+            start_time = time.time()
 
             model_fn = model_wrapper(
                 sampler.model.model,
@@ -144,10 +153,9 @@ def sample_model_withDPMSolver(input_im, model, sampler, precision, h, w,
             shape = [n_samples ,4, h // 8, w // 8]
             x_T = torch.randn(shape, device=model.device)
 
-            start_time = time.time()
             sample_dpm = dpm_solver.sample(
                 x_T,
-                steps=10,
+                steps=20,
                 order=2,
                 skip_type="logSNR",
                 method="multistep",
@@ -221,7 +229,7 @@ def main_run(raw_im,
              models, device,
              elevation=0.0, azimuth=0.0, radius=0.0,
              preprocess=False,
-             scale=3.0, n_samples=4, ddim_steps=20, ddim_eta=1.0,
+             scale=3.0, n_samples=4, ddim_steps=50, ddim_eta=1.0,
              precision='fp32', h=256, w=256):
     '''
     :param raw_im (PIL Image).
@@ -259,7 +267,7 @@ def main_run(raw_im,
     sampler = DDIMSampler(models['turncam'])
     # used_x = -x  # NOTE: Polar makes more sense in Basile's opinion this way!
     used_elevation = elevation  # NOTE: Set this way for consistency.
-    x_samples_ddim = sample_model_withDPMSolver(input_im, models['turncam'], sampler, precision, h, w,
+    x_samples_ddim = sample_model(input_im, models['turncam'], sampler, precision, h, w,
                                   ddim_steps, n_samples, scale, ddim_eta,
                                   used_elevation, azimuth, radius)
 
@@ -304,7 +312,7 @@ def predict(device_idx: int =_GPU_INDEX,
     preds_images = main_run(raw_im=cond_image,
                             models=models, device=device,
                             elevation=np.deg2rad(elevation_in_degree),
-                            azimuth=np.deg2rad(azimuth_in_degree),
+                            azimuth=np.deg2rad(30.0),
                             radius=radius)
 
     pred_image = preds_images[-1]
