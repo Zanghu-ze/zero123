@@ -19,7 +19,7 @@ from torch import autocast
 from torchvision import transforms
 
 
-_GPU_INDEX = 0
+_GPU_INDEX = 1
 local_safety_checker_path = '/storage/home/haoze/.cache/huggingface/hub/models--CompVis--stable-diffusion-safety-checker/snapshots/cb41f3a270d63d454d385fc2e4f571c487c253c5'
 
 
@@ -53,9 +53,13 @@ def sample_model(input_im, model, sampler, precision, h, w,
             c = model.get_learned_conditioning(input_im).tile(n_samples, 1, 1)
             # elevation = math.radians(elevation)
             # azimuth = math.radians(azimuth)
-            T = torch.tensor([elevation,
-                              math.sin(azimuth), math.cos(azimuth),
-                              radius])
+            T = torch.tensor([0.0,
+                              0.0,
+                              0.0,
+                              elevation,
+                              math.sin(np.deg2rad(15)), 
+                              math.cos(np.deg2rad(15)),
+                              ])
             T = T[None, None, :].repeat(n_samples, 1, 1).to(c.device)
             c = torch.cat([c, T], dim=-1).float()
             c = model.cc_projection(c)
@@ -186,7 +190,7 @@ def main_run(raw_im,
 
 def predict(device_idx: int =_GPU_INDEX,
             ckpt: str ="./105000.ckpt",
-            config: str ="configs/sd-objaverse-finetune-c_concat-256.yaml",
+            config: str ="/storage/home/haoze/using_models/zero123/zero123/configs/test-alldirection-fintune-c.yaml",
             cond_image_path: str = "cond.png",
             elevation_in_degree: float = 0.0,
             azimuth_in_degree: float = 0.0,
@@ -217,7 +221,7 @@ def predict(device_idx: int =_GPU_INDEX,
     preds_images = main_run(raw_im=cond_image,
                             models=models, device=device,
                             elevation=np.deg2rad(elevation_in_degree),
-                            azimuth=np.deg2rad(azimuth_in_degree),
+                            azimuth=np.deg2rad(30.0),
                             radius=radius)
 
     pred_image = preds_images[-1]
