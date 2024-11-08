@@ -54,11 +54,11 @@ def sample_model(input_im, model, sampler, precision, h, w,
             # elevation = math.radians(elevation)
             # azimuth = math.radians(azimuth)
             T = torch.tensor([0.0,
-                              0.0,
+                              -0.4,
                               0.0,
                               elevation,
-                              math.sin(np.deg2rad(15)), 
-                              math.cos(np.deg2rad(15)),
+                              math.sin(math.radians(0.0)), 
+                              math.cos(math.radians(0.0)),
                               ])
             T = T[None, None, :].repeat(n_samples, 1, 1).to(c.device)
             c = torch.cat([c, T], dim=-1).float()
@@ -221,7 +221,7 @@ def predict(device_idx: int =_GPU_INDEX,
     preds_images = main_run(raw_im=cond_image,
                             models=models, device=device,
                             elevation=np.deg2rad(elevation_in_degree),
-                            azimuth=np.deg2rad(30.0),
+                            azimuth=np.deg2rad(azimuth_in_degree),
                             radius=radius)
 
     pred_image = preds_images[-1]
