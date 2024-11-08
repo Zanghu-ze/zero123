@@ -21,7 +21,7 @@ import random
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 import json
-import os, sys
+import os, sys, time
 import webdataset as wds
 import math
 from torch.utils.data.distributed import DistributedSampler
@@ -593,7 +593,10 @@ class HM3DData(Dataset):
 
         data["image_target"] = target_im
         data["image_cond"] = cond_im
+        start_time = time.time()
         data["T"] = self.get_T(target_RT, cond_RT)
+        end_time = time.time()
+        # print(f"The dataset reading time{(end_time - start_time):.03f}\n")
 
         if self.postprocess is not None:
             data = self.postprocess(data)
