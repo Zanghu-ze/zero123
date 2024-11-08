@@ -1,4 +1,5 @@
 from typing import Dict
+from regex import D
 import webdataset as wds
 import numpy as np
 from omegaconf import DictConfig, ListConfig
@@ -11,7 +12,7 @@ from torchvision import transforms
 import torchvision
 from einops import rearrange
 from ldm.util import instantiate_from_config
-from datasets import load_dataset
+from datasets import load_dataset # type: ignore
 import pytorch_lightning as pl
 import copy
 import csv
@@ -24,6 +25,7 @@ import os, sys
 import webdataset as wds
 import math
 from torch.utils.data.distributed import DistributedSampler
+from scipy.spatial.transform import Rotation as R
 
 # Some hacky things to make experimentation easier
 def make_transform_multi_folder_data(paths, caption_files=None, **kwargs):
@@ -37,6 +39,10 @@ def make_nfp_data(base_path):
     tforms = [transforms.Resize(512), transforms.CenterCrop(512)]
     datasets = [NfpDataset(x, image_transforms=copy.copy(tforms), default_caption="A view from a train window") for x in dirs]
     return torch.utils.data.ConcatDataset(datasets)
+
+# Custom rounding function to round to the nearest multiple of 5
+def round_to_nearest_5(value):
+    return int(round(value / 5) * 5)
 
 
 class VideoDataset(Dataset):
@@ -403,6 +409,62 @@ class HM3DData(Dataset):
         ])
         return R
         
+    def quaternion_to_euler(self, q_relative):
+        """
+        Convert the relative quaternion to yaw (z-axis) and pitch (y-axis) angles.
+        """
+        w, x, y, z = q_relative
+        # Yaw (z-axis rotation)
+        yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y**2 + z**2))
+        # Pitch (y-axis rotation)
+        pitch = np.arcsin(2 * (w * y - z * x))
+        return np.degrees(yaw), np.degrees(pitch)
+
+    def get_relative_quaternion(self, q_target, q_cond):
+        """
+        Calculate the relative quaternion q_relative = q_cond^-1 * q_target
+        where q_cond^-1 is the conjugate of q_cond.
+        """
+        w1, x1, y1, z1 = q_cond
+        w2, x2, y2, z2 = q_target
+        # q_cond conjugate
+        q_cond_conj = [w1, -x1, -y1, -z1]
+        # Quaternion multiplication: q_relative = q_cond_conj * q_target
+        w = q_cond_conj[0] * w2 - q_cond_conj[1] * x2 - q_cond_conj[2] * y2 - q_cond_conj[3] * z2
+        x = q_cond_conj[0] * x2 + q_cond_conj[1] * w2 + q_cond_conj[2] * z2 - q_cond_conj[3] * y2
+        y = q_cond_conj[0] * y2 - q_cond_conj[1] * z2 + q_cond_conj[2] * w2 + q_cond_conj[3] * x2
+        z = q_cond_conj[0] * z2 + q_cond_conj[1] * y2 - q_cond_conj[2] * x2 + q_cond_conj[3] * w2
+        return [w, x, y, z]
+
+    # Function to calculate rotation differences between two quaternions on Z and Y axes
+    def calculate_rotation_difference(self, quaternion_cond, quaternion_target):
+        # Convert each quaternion to rotation objects in [qx, qy, qz, qw] format for scipy
+        rotation_cond = R.from_quat([quaternion_cond[1], quaternion_cond[2], quaternion_cond[3], quaternion_cond[0]])
+        rotation_target = R.from_quat([quaternion_target[1], quaternion_target[2], quaternion_target[3], quaternion_target[0]])
+        
+        # # Extract Euler angles (ZYX order) in degrees to get Yaw (Z) and Pitch (Y) angles
+        # euler_cond = rotation_cond.as_euler('zyx', degrees=True)
+        # euler_target = rotation_target.as_euler('zyx', degrees=True)
+
+        # Compute the relative rotation from q2 to q1
+        rotation_diff = rotation_target.inv() * rotation_cond
+
+        # Convert the relative rotation to a rotation matrix
+        rotation_matrix = rotation_diff.as_matrix()
+
+        # # Calculate Yaw (Z axis) and Pitch (Y axis) angles from the rotation matrix
+        # yaw_z_analyze = np.degrees(np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0]))  # Z axis rotation
+        # pitch_y_analyze = np.degrees(np.arcsin(-rotation_matrix[2, 0]))  # Y axis rotation
+
+        # Calculate Yaw (Z axis) and Pitch (Y axis) angles from the rotation matrix
+        yaw_z_analyze = np.degrees(np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0]))  # Z axis rotation
+        pitch_y_analyze = np.degrees(np.arcsin(-rotation_matrix[2, 0]))  # Y axis rotation
+        
+        # Calculate the differences in Yaw (Z axis) and Pitch (Y axis) and round to nearest 5
+        delta_yaw_z = round_to_nearest_5(yaw_z_analyze)  # Yaw difference (Z axis)
+        delta_pitch_y = round_to_nearest_5(pitch_y_analyze)  # Pitch difference (Y axis)
+        
+        return delta_yaw_z, delta_pitch_y
 
     def get_T(self, target_pose, cond_pose):
         # target_pose: [x, y, z, qw, qx, qy, qz]
@@ -419,26 +481,34 @@ class HM3DData(Dataset):
 
         # Calculate position differences in the same coordinate frame
         delta_pos = T_target - T_cond
-        delta_x, delta_y, delta_z = delta_pos  # Unpack the delta positions
+        delta_x, delta_y, delta_z = delta_pos  # type: ignore # Unpack the delta positions
 
-        # Calculate transformed translations (similar to original code)
-        T_target_transformed = -R_target.T @ T_target
-        T_cond_transformed = -R_cond.T @ T_cond
+        # # Calculate transformed translations (similar to original code)
+        # T_target_transformed = -R_target.T @ T_target
+        # T_cond_transformed = -R_cond.T @ T_cond
 
-        # Convert transformed translations to spherical coordinates
-        theta_cond, azimuth_cond, _ = self.cartesian_to_spherical(T_cond_transformed[None, :])
-        theta_target, azimuth_target, _ = self.cartesian_to_spherical(T_target_transformed[None, :])
+        d_azimuth_deg, d_theta_deg = self.calculate_rotation_difference(quaternion_cond, quaternion_target)
 
-        # Calculate relative differences
-        d_theta = theta_target - theta_cond
-        d_azimuth = (azimuth_target - azimuth_cond) % (2 * math.pi)
-
-        # round the original data
-        d_theta_deg = round(math.degrees(d_theta.item()) / 5) * 5
-        d_azimuth_deg = round(math.degrees(d_azimuth.item()) / 5) * 5
-
-        d_theta = math.radians(d_theta_deg)
         d_azimuth = math.radians(d_azimuth_deg)
+        d_theta   = math.radians(d_theta_deg)
+
+        # # Convert transformed translations to spherical coordinates
+        # theta_cond, azimuth_cond, _ = self.cartesian_to_spherical(T_cond_transformed[None, :])
+        # theta_target, azimuth_target, _ = self.cartesian_to_spherical(T_target_transformed[None, :])
+
+        # # Calculate relative differences
+        # d_theta = theta_target - theta_cond
+        # d_azimuth = (azimuth_target - azimuth_cond) % (2 * math.pi)
+        # Calculate relative quaternion
+        # q_relative = self.get_relative_quaternion(quaternion_target, quaternion_cond)
+        # d_azimuth, d_theta = self.quaternion_to_euler(q_relative)
+
+        # # round the original data
+        # d_theta_deg = round(math.degrees(d_theta.item()) / 5) * 5
+        # d_azimuth_deg = round(math.degrees(d_azimuth.item()) / 5) * 5
+
+        # d_theta = math.radians(d_theta_deg)
+        # d_azimuth = math.radians(d_azimuth_deg)
         
         # Round delta_x, delta_y, delta_z to 3 decimal places
         delta_x = round(delta_x, 3)
@@ -461,10 +531,10 @@ class HM3DData(Dataset):
             delta_x,                  # Delta x
             delta_y,                  # Delta y
             delta_z,                  # Delta z
-            d_theta,                  # Elevation
+            d_theta,                  # Value of delta
             sin_azimuth,              # Sin of azimuth
             cos_azimuth               # Cos of azimuth
-        ])
+        ])  
         return d_T
 
     def load_im(self, path, color):
