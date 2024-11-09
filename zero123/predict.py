@@ -53,12 +53,12 @@ def sample_model(input_im, model, sampler, precision, h, w,
             c = model.get_learned_conditioning(input_im).tile(n_samples, 1, 1)
             # elevation = math.radians(elevation)
             # azimuth = math.radians(azimuth)
-            T = torch.tensor([0.0,
-                              -0.4,
+            T = torch.tensor([0.4,
+                              0.0,
                               0.0,
                               elevation,
-                              math.sin(math.radians(0.0)), 
-                              math.cos(math.radians(0.0)),
+                              math.sin(azimuth), 
+                              math.cos(azimuth),
                               ])
             T = T[None, None, :].repeat(n_samples, 1, 1).to(c.device)
             c = torch.cat([c, T], dim=-1).float()

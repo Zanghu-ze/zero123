@@ -721,7 +721,7 @@ if __name__ == "__main__":
         trainer_kwargs = dict()
 
 
-        wandb_log_dir = "/storage/home/haoze/logs"
+        wandb_log_dir = "/storage/home/haoze/logs_new"
         # default logger configs
         default_logger_cfgs = {
             "wandb": {
@@ -741,7 +741,7 @@ if __name__ == "__main__":
                 }
             },
         }
-        default_logger_cfg = default_logger_cfgs["testtube"]
+        default_logger_cfg = default_logger_cfgs["wandb"]
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:
